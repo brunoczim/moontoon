@@ -1,4 +1,9 @@
-use std::{collections::HashMap, num::NonZero, path::PathBuf, time::Duration};
+use std::{
+    collections::{HashMap, hash_map},
+    num::NonZero,
+    path::PathBuf,
+    time::Duration,
+};
 
 use mlua::{Lua, LuaOptions, StdLib};
 
@@ -32,11 +37,34 @@ impl Runtime {
     pub fn preload(&mut self) -> Result<(), Error> {
         let mut modules = HashMap::new();
         let mut module_names = Vec::new();
+        let mut errors = Vec::new();
         for result in enumerate_modules(self.source_dir.clone()) {
-            let module = result?;
+            let module = match result {
+                Ok(x) => x,
+                Err(e) => {
+                    errors.push(e);
+                    continue;
+                },
+            };
             module_names.push(module.name.clone());
-            modules.insert(module.name.clone(), module);
+            match modules.entry(module.name.clone()) {
+                hash_map::Entry::Occupied(_) => {
+                    errors.push(
+                        ErrorInner::DuplicateModuleName {
+                            module_name: module.name,
+                            path: module.path,
+                        }
+                        .into(),
+                    );
+                },
+                hash_map::Entry::Vacant(entry) => {
+                    entry.insert(module);
+                },
+            }
         }
+
+        Error::multi(errors)?;
+
         let function = move |lua: &Lua,
                              (name, _): (Box<str>, ())|
               -> mlua::Result<mlua::Value> {
@@ -78,7 +106,7 @@ impl Runtime {
             main.get("channels").map_err(ErrorInner::GetLuaChannels)?;
 
         let sample_rate: Option<u32> =
-            main.get("channels").map_err(ErrorInner::GetLuaSampleRate)?;
+            main.get("sample_rate").map_err(ErrorInner::GetLuaSampleRate)?;
 
         let channels = NonZero::new(channels.unwrap_or(1))
             .ok_or(ErrorInner::InvalidLuaChannels)?;

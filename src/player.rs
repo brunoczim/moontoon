@@ -109,8 +109,10 @@ where
                 return None;
             },
         };
-        self.time += 1.0 / f64::from(self.stream.sample_rate().get());
         self.channel = (self.channel + 1) % self.stream.channels().get();
+        if self.channel == 0 {
+            self.time += 1.0 / f64::from(self.stream.sample_rate().get());
+        }
         Some(sample as rodio::Sample)
     }
 }

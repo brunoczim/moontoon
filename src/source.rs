@@ -182,9 +182,17 @@ impl ModuleEnumerator {
                             },
                         };
 
-                        self.module_prefix.push(module_segment.to_owned());
-                        let name = self.module_prefix.join(".");
-                        self.module_prefix.pop();
+                        let name;
+
+                        if module_segment == "init"
+                            && self.module_prefix.len() > 0
+                        {
+                            name = self.module_prefix.join(".");
+                        } else {
+                            self.module_prefix.push(module_segment.to_owned());
+                            name = self.module_prefix.join(".");
+                            self.module_prefix.pop();
+                        }
 
                         let module = Module { path, content, name };
 
