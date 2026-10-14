@@ -1,4 +1,4 @@
-local waves = require("waves")
+local waves = require("example.waves")
 
 local wave = waves.sin(440)
 

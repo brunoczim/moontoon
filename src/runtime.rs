@@ -1,27 +1,19 @@
-use std::{
-    collections::{HashMap, hash_map},
-    num::NonZero,
-    path::PathBuf,
-    time::Duration,
-};
+use std::{num::NonZero, path::PathBuf, sync::Arc, time::Duration};
 
 use mlua::{Lua, LuaOptions, StdLib};
 
-use crate::{
-    Error,
-    error::ErrorInner,
-    player::AudioStream,
-    source::enumerate_modules,
-};
+use crate::{Error, error::ErrorInner, package::Package, player::AudioStream};
 
 #[derive(Debug)]
 pub struct Runtime {
     lua: Lua,
-    source_dir: PathBuf,
+    package: Arc<Package>,
 }
 
 impl Runtime {
-    pub fn new(source_dir: impl Into<PathBuf>) -> Result<Self, Error> {
+    pub fn new(root_dir: impl Into<PathBuf>) -> Result<Self, Error> {
+        let root_dir = root_dir.into();
+
         let lua_stdlib = StdLib::JIT
             | StdLib::TABLE
             | StdLib::STRING
@@ -31,70 +23,44 @@ impl Runtime {
         let lua = Lua::new_with(lua_stdlib, LuaOptions::new())
             .map_err(ErrorInner::InitLua)?;
 
-        Ok(Self { lua, source_dir: source_dir.into() })
-    }
+        let package = Arc::new(Package::load(root_dir.clone())?);
 
-    pub fn preload(&mut self) -> Result<(), Error> {
-        let mut modules = HashMap::new();
-        let mut module_names = Vec::new();
-        let mut errors = Vec::new();
-        for result in enumerate_modules(self.source_dir.clone()) {
-            let module = match result {
-                Ok(x) => x,
-                Err(e) => {
-                    errors.push(e);
-                    continue;
-                },
-            };
-            module_names.push(module.name.clone());
-            match modules.entry(module.name.clone()) {
-                hash_map::Entry::Occupied(_) => {
-                    errors.push(
-                        ErrorInner::DuplicateModuleName {
-                            module_name: module.name,
-                            path: module.path,
-                        }
-                        .into(),
-                    );
-                },
-                hash_map::Entry::Vacant(entry) => {
-                    entry.insert(module);
-                },
+        let module_names = package.modules.keys().cloned().collect::<Vec<_>>();
+
+        let function = {
+            let package = package.clone();
+
+            move |lua: &Lua,
+                  (name,): (Box<str>,)|
+                  -> mlua::Result<mlua::Value> {
+                let Some(module) = package.modules.get(&name[..]) else {
+                    Err(mlua::Error::RuntimeError(format!(
+                        "Module name {name:?} not found"
+                    )))?
+                };
+                lua.load(module).eval()
             }
-        }
-
-        Error::multi(errors)?;
-
-        let function = move |lua: &Lua,
-                             (name, _): (Box<str>, ())|
-              -> mlua::Result<mlua::Value> {
-            let Some(module) = modules.get(&name[..]) else {
-                Err(mlua::Error::RuntimeError(format!(
-                    "Module name {name:?} not found"
-                )))?
-            };
-            lua.load(module).eval()
         };
-        let lua_function = self
-            .lua
-            .create_function(function)
-            .map_err(ErrorInner::PreloadLua)?;
-        for module_name in module_names {
-            self.lua
-                .preload_module(&module_name, lua_function.clone())
+        let lua_function =
+            lua.create_function(function).map_err(ErrorInner::PreloadLua)?;
+        for modname in module_names {
+            lua.preload_module(modname.content(), lua_function.clone())
                 .map_err(ErrorInner::PreloadLua)?;
         }
-        Ok(())
+
+        Ok(Self { lua, package })
     }
 
     pub fn load_project(&self) -> Result<Project, Error> {
+        let modname = self.package.config.name.content();
+
         let require: mlua::Function = self
             .lua
             .globals()
             .get("require")
             .map_err(ErrorInner::GetLuaRequire)?;
         let main: mlua::Table =
-            require.call(("main",)).map_err(ErrorInner::RequireLuaMain)?;
+            require.call((modname,)).map_err(ErrorInner::RequireLuaMain)?;
 
         let at: mlua::Function =
             main.get("at").map_err(ErrorInner::GetLuaAt)?;

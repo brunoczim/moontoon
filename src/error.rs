@@ -2,6 +2,8 @@ use std::{error::Error as StdError, fmt, io, mem, path::PathBuf};
 
 use thiserror::Error;
 
+use crate::source::ModName;
+
 #[derive(Debug, Error)]
 #[error(transparent)]
 pub struct Error {
@@ -29,6 +31,15 @@ impl Error {
             let multi = ErrorMulti { inner: collection.into() };
             Err(ErrorInner::Multi(multi))?
         }
+    }
+
+    pub(crate) fn replace(&mut self, inner: ErrorInner) -> ErrorInner {
+        mem::replace(&mut *self.inner, inner)
+    }
+
+    pub(crate) fn replacing(mut self, inner: ErrorInner) -> Self {
+        self.replace(inner);
+        self
     }
 }
 
@@ -71,19 +82,49 @@ pub enum ErrorInner {
         source: io::Error,
         path: PathBuf,
     },
+    #[error("invalid module name segment {:?}", input)]
+    InvalidModNameSegStr { input: String },
+    #[error("invalid module name segment in path {}", path.display())]
+    InvalidModNameSegPath { path: PathBuf },
+    #[error("invalid module name {:?}", input)]
+    InvalidModNameStr { input: String },
     #[error("invalid module name in path {}", path.display())]
-    InvalidModuleName { path: PathBuf },
+    InvalidModNamePath { path: PathBuf },
     #[error(
         "duplicate module name {} found in path {}",
         module_name,
         path.display(),
     )]
-    DuplicateModuleName { module_name: String, path: PathBuf },
+    DuplicateModName { module_name: ModName, path: PathBuf },
     #[error(
         "omitting further errors, too many errors reading directory in path {}",
         path.display(),
     )]
     TooManyDirErrors { path: PathBuf },
+    #[error("failed to read pacakge configuration in path {}", path.display())]
+    ReadPackageConfig {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("failed to parse pacakge configuration in path {}", path.display())]
+    ParsePackageConfig {
+        path: PathBuf,
+        #[source]
+        source: toml::de::Error,
+    },
+    #[error("failed to write pacakge configuration in path {}", path.display())]
+    WritePackageConfig {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("failed to mit pacakge configuration in path {}", path.display())]
+    EmitPackageConfig {
+        path: PathBuf,
+        #[source]
+        source: toml::ser::Error,
+    },
     #[error("failed to open device sink")]
     OpenDeviceSink(#[from] rodio::DeviceSinkError),
     #[error("multiple errors found")]
